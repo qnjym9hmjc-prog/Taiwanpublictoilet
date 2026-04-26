@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <title>全國公廁大數據儀表板 - 密度比較版</title>
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+    <style>
+        :root { --primary: #2f54eb; --danger: #f5222d; --bg: #f0f2f5; }
+        body { font-family: "Microsoft JhengHei", sans-serif; background-color: var(--bg); margin: 0; padding: 20px; color: #333; }
+        .dashboard { max-width: 1500px; margin: 0 auto; }
+        
+        /* 檔案載入與篩選區 */
+        .control-panel { background: white; padding: 20px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); margin-bottom: 20px; border-left: 8px solid var(--primary); }
+        .upload-section { margin-bottom: 15px; padding-bottom: 15px; border-bottom: 1px solid #eee; }
+        .upload-controls { display: flex; align-items: center; gap: 15px; margin-bottom: 8px; }
+        .csv-note { font-size: 0.85em; color: #888; background: #f8fafc; padding: 8px 12px; border-radius: 6px; display: inline-block; border: 1px dashed #cbd5e1;}
+        
+        .filter-row { display: flex; gap: 15px; flex-wrap: wrap; }
+        .filter-group { display: flex; flex-direction: column; gap: 5px; flex: 1; min-width: 150px; }
+        select, input[type="file"] { padding: 10px; border-radius: 6px; border: 1px solid #cdd4d9; font-size: 15px; outline: none; background: #f8fafc; }
+        select:hover { border-color: var(--primary); }
+        
+        /* KPI 區塊 */
+        .kpi-bar { display: flex; gap: 20px; margin-bottom: 20px; }
+        .kpi-card { flex: 1; background: white; padding: 25px; border-radius: 12px; text-align: center; box-shadow: 0 4px 15px rgba(0,0,0,0.05); border-top: 5px solid; }
+        .kpi-card.total { border-color: var(--danger); } /* 紅色邊框 */
+        .kpi-card.density { border-color: #52c41a; }
+        
+        /* 特別強調總座數的紅色字體 */
+        .kpi-val.highlight-red { font-size: 4.5em; font-weight: bold; margin: 5px 0; color: var(--danger); text-shadow: 1px 1px 3px rgba(245, 34, 45, 0.2); }
+        .kpi-val { font-size: 3.5em; font-weight: bold; margin: 5px 0; color: #333; }
+        .kpi-title { font-size: 1.2em; color: #666; font-weight: bold; }
+
+        /* 圖表網格佈局 */
+        .grid-main { display: grid; grid-template-columns: 2fr 1fr; gap: 20px; margin-bottom: 20px; }
+        .grid-sub { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 20px; }
+        .card { background: white; padding: 20px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); }
+        
+        #mapChart { height: 650px; }
+        #venueTreemap { height: 650px; }
+        .bar-chart { height: 400px; }
+
+        /* 清單與通報 */
+        .table-area { max-height: 400px; overflow-y: auto; border: 1px solid #eee; border-radius: 8px; }
+        table { width: 100%; border-collapse: collapse; text-align: left; }
+        th { background: #e2e8f0; padding: 15px; position: sticky; top: 0; z-index: 5; color: #334155; }
+        td { padding: 12px 15px; border-bottom: 1px solid #f1f5f9; }
+        tr:hover { background: #f8fafc; }
+        
+        .report-box { background: #fff5f5; border-left: 6px solid var(--danger); padding: 25px; border-radius: 12px; margin-top: 20px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); }
+        .btn { display: inline-block; background: var(--danger); color: white; padding: 12px 25px; text-decoration: none; border-radius: 6px; font-weight: bold; margin-top: 15px; transition: 0.3s; }
+        .btn:hover { background: #cf1322; }
+    </style>
+</head>
+<body>
+
+<div class="dashboard">
+    <h2>📊 全國公廁動態查詢儀表板</h2>
+
+    <div class="control-panel">
+        <div class="upload-section">
+            <div class="upload-controls">
+                <label style="font-weight: bold; color: var(--primary);">📂 資料來源：</label>
+                <input type="file" id="csvFileInput" accept=".csv">
+                <span id="uploadStatus" style="color: #64748b;">請選擇您的公廁資料 CSV 檔案 (可自動載入 data.csv)</span>
+            </div>
+            <div class="csv-note">
+                💡 <b>CSV 檔必備欄位提醒：</b>檔案的標題列需包含「<b>縣市</b>」、「<b>公廁名稱</b>」、「<b>公廁性質</b>」、「<b>公廁所在場所</b>」、「<b>等級</b>」、「<b>地址</b>」，系統方能精準解析。
+            </div>
+        </div>
+        <div class="filter-row">
+            <div class="filter-group"><label>📍 縣市</label><select id="filterCity" onchange="refreshAll()"><option value="ALL">全部縣市</option></select></div>
+            <div class="filter-group"><label>🏢 公廁所在場所</label><select id="filterVenue" onchange="refreshAll()"><option value="ALL">全部場所</option></select></div>
+            <div class="filter-group"><label>🚻 公廁性質</label><select id="filterNature" onchange="refreshAll()"><option value="ALL">全部性質</option></select></div>
+            <div class="filter-group"><label>⭐ 等級</label><select id="filterGrade" onchange="refreshAll()"><option value="ALL">全部等級</option></select></div>
+        </div>
+    </div>
+
+    <div class="kpi-bar">
+        <div class="kpi-card total">
+            <div class="kpi-title">🔥 目前篩選條件下「公廁總座數」</div>
+            <div class="kpi-val highlight-red" id="totalKPI">0</div>
+        </div>
+        <div class="kpi-card density">
+            <div class="kpi-title">設施充足度分析 (公廁密度)</div>
+            <div class="kpi-val" id="densityKPI" style="color: #52c41a;">0.00</div>
+            <div style="color: #666; font-size: 1em; margin-top: 5px;">
+                單位：每萬人擁有座數 <span id="densityCompare" style="font-weight:bold; margin-left:10px;"></span>
+            </div>
+        </div>
+    </div>
+
+    <div class="grid-main">
+        <div class="card">
+            <h3 style="margin-top: 0; color: var(--primary);">🗺️ 台灣公廁分佈密度地圖</h3>
+            <div id="mapChart"></div>
+        </div>
+        <div class="card">
+            <h3 style="margin-top: 0; color: var(--primary);">🏢 公廁所在場所佔比 (Treemap)</h3>
+            <div id="venueTreemap"></div>
+        </div>
+    </div>
+
+    <div class="grid-sub">
+        <div class="card">
+            <h3 style="margin-top: 0; color: var(--primary);">🚻 公廁性質座數 (男/女/無障礙等)</h3>
+            <div id="natureBarChart" class="bar-chart"></div>
+        </div>
+        <div class="card">
+            <h3 style="margin-top: 0; color: var(--primary);">⭐ 公廁等級座數分佈</h3>
+            <div id="gradeBarChart" class="bar-chart"></div>
+        </div>
+    </div>
+
+    <div class="card">
+        <h3 style="margin-top: 0; color: var(--primary);">📍 公廁地址查詢結果</h3>
+        <div class="table-area">
+            <table>
+                <thead>
+                    <tr>
+                        <th width="25%">公廁名稱</th>
+                        <th width="15%">所在場所</th>
+                        <th width="15%">公廁性質</th>
+                        <th width="10%">等級</th>
+                        <th width="35%">地址</th>
+                    </tr>
+                </thead>
+                <tbody id="addressList"><tr><td colspan="5" style="text-align:center; padding: 30px;">等待資料載入...</td></tr></tbody>
+            </table>
+        </div>
+    </div>
+
+    <div class="report-box">
+        <h3 style="margin: 0; color: var(--danger);">🚨 相關民眾通報案件與系統連結</h3>
+        <p id="reportContext" style="font-size: 1.1em;">等待資料載入中...</p>
+        <a href="https://esms.moenv.gov.tw/Toilet/ToiletMissing" target="_blank" class="btn">🔗 前往環境部公廁通報系統進行舉報</a>
+    </div>
+</div>
+
+<script>
+    let globalData = [];
+    
+    // 內建台灣各縣市概估人口數
+    const popData = {
+        "新北市": 4040000, "臺中市": 2840000, "高雄市": 2730000, "臺北市": 2510000,
+        "桃園市": 2310000, "臺南市": 1860000, "彰化縣": 1230000, "屏東縣": 790000,
+        "雲林縣": 660000, "新竹縣": 590000, "苗栗縣": 530000, "嘉義縣": 480000,
+        "南投縣": 470000, "宜蘭縣": 450000, "新竹市": 450000, "基隆市": 360000,
+        "花蓮縣": 310000, "嘉義市": 260000, "臺東縣": 210000, "金門縣": 140000,
+        "澎湖縣": 100000, "連江縣": 14000
+    };
+    const totalPop = Object.values(popData).reduce((a, b) => a + b, 0);
+
+    // 視覺顏色邏輯：量少(紅色) -> 量中(黃色) -> 量多(綠色)
+    const colorGradient = ['#f5222d', '#fa8c16', '#fadb14', '#a0d911', '#52c41a'];
+
+    const mapChart = echarts.init(document.getElementById('mapChart'));
+    const treemapChart = echarts.init(document.getElementById('venueTreemap'));
+    const natureChart = echarts.init(document.getElementById('natureBarChart'));
+    const gradeChart = echarts.init(document.getElementById('gradeBarChart'));
+
+    fetch('https://raw.githubusercontent.com/g0v/twgeojson/master/json/twCounty2010.geo.json')
+        .then(res => res.json())
+        .then(geoJson => echarts.registerMap('Taiwan', geoJson));
+
+    function processCSV(results) {
+        globalData = results.data.map(row => ({
+            city: row['縣市'] || row['縣市名稱'] || '',
+            // 若沒有名稱，則直接給空字串，不再強制顯示「無名稱公廁」
+            name: row['公廁名稱'] || row['名稱'] || '',
+            nature: row['公廁性質'] || row['性質'] || '未標示',
+            venue: row['公廁所在場所'] || row['場所'] || row['類別'] || '未標示',
+            grade: row['等級'] || row['評等'] || '無',
+            addr: row['地址'] || row['詳細地址'] || ''
+        })).filter(d => d.city !== '');
+
+        document.getElementById('uploadStatus').innerHTML = `✅ 成功載入 <b>${globalData.length.toLocaleString()}</b> 筆資料！`;
+        
+        populateSelect('filterCity', [...new Set(globalData.map(d => d.city))]);
+        populateSelect('filterVenue', [...new Set(globalData.map(d => d.venue))]);
+        populateSelect('filterNature', [...new Set(globalData.map(d => d.nature))]);
+        populateSelect('filterGrade', [...new Set(globalData.map(d => d.grade))]);
+        refreshAll();
+    }
+
+    // 嘗試自動抓取 data.csv，若無則等待手動上傳
+    fetch('data.csv').then(res => { if(!res.ok) throw new Error(); return res.text(); })
+        .then(txt => { Papa.parse(txt, { header: true, skipEmptyLines: true, complete: processCSV }); document.getElementById('csvFileInput').style.display = 'none'; document.getElementById('uploadStatus').innerHTML = "✅ 已自動載入 data.csv"; })
+        .catch(() => { document.getElementById('csvFileInput').addEventListener('change', e => { if(e.target.files[0]) Papa.parse(e.target.files[0], { header: true, skipEmptyLines: true, complete: processCSV }); }); });
+
+    function populateSelect(id, items) { document.getElementById(id).innerHTML = '<option value="ALL">全部</option>' + items.filter(i => i && i !== '未標示').sort().map(i => `<option value="${i}">${i}</option>`).join(''); }
+
+    function refreshAll() {
+        if(globalData.length === 0) return;
+        
+        const city = document.getElementById('filterCity').value;
+        const venue = document.getElementById('filterVenue').value;
+        const nature = document.getElementById('filterNature').value;
+        const grade = document.getElementById('filterGrade').value;
+
+        const nationalFiltered = globalData.filter(d => (venue === 'ALL' || d.venue === venue) && (nature === 'ALL' || d.nature === nature) && (grade === 'ALL' || d.grade === grade));
+        const filtered = nationalFiltered.filter(d => city === 'ALL' || d.city === city);
+
+        // --- KPI 1: 公廁總座數 ---
+        const count = filtered.length;
+        document.getElementById('totalKPI').innerText = count.toLocaleString();
+
+        // --- KPI 2: 密度與平均比較邏輯 ---
+        let population = city === 'ALL' ? totalPop : (popData[city] || 1); 
+        let currentDensity = (count / population) * 10000;
+        document.getElementById('densityKPI').innerText = currentDensity.toFixed(2);
+
+        let nationalDensity = (nationalFiltered.length / totalPop) * 10000;
+        let compareHtml = "";
+
+        if (city === 'ALL') {
+            compareHtml = "<span style='color: #1890ff;'>(此為全國平均基準)</span>";
+        } else {
+            if (currentDensity > nationalDensity) {
+                compareHtml = `<span style="color: #52c41a; background: #f6ffed; padding: 2px 8px; border-radius: 4px; border: 1px solid #b7eb8f;">🟢 高於全國平均 (${nationalDensity.toFixed(2)})</span>`;
+            } else if (currentDensity < nationalDensity) {
+                compareHtml = `<span style="color: #fa541c; background: #fff2e8; padding: 2px 8px; border-radius: 4px; border: 1px solid #ffbb96;">🔴 低於全國平均 (${nationalDensity.toFixed(2)})</span>`;
+            } else {
+                compareHtml = `<span style="color: #888;">(等於全國平均)</span>`;
+            }
+        }
+        document.getElementById('densityCompare').innerHTML = compareHtml;
+
+        // --- 更新清單 ---
+        document.getElementById('addressList').innerHTML = filtered.slice(0, 500).map((d, index) => {
+            // 邏輯判斷：如果有名稱就加上「編號. 名稱」，沒有名稱就直接填「編號」
+            const displayTitle = d.name ? `${index + 1}. ${d.name}` : `${index + 1}`;
+            return `
+            <tr>
+                <td><b>${displayTitle}</b></td>
+                <td><span style="background:#e0f2fe; color:#0369a1; padding:4px 8px; border-radius:4px; font-size: 0.9em;">${d.venue}</span></td>
+                <td>${d.nature}</td>
+                <td>${d.grade}</td>
+                <td>${d.addr}</td>
+            </tr>
+            `;
+        }).join('') || '<tr><td colspan="5" style="text-align:center;">無符合條件的資料</td></tr>';
+
+        document.getElementById('reportContext').innerHTML = city === 'ALL' ? '請點擊下方按鈕，即可進入環境部系統查詢<b>全國各縣市</b>之通報狀態：' : `您目前正在查詢 <b>${city}</b>，若發現該區公廁 (${venue === 'ALL' ? '所有場所' : venue}) 發生異常，請立即利用下方連結通報：`;
+
+        updateChartsWithGradient(filtered);
+    }
+
+    function updateChartsWithGradient(data) {
+        const cityMap = {}; data.forEach(d => cityMap[d.city] = (cityMap[d.city] || 0) + 1);
+        const maxCity = Math.max(...Object.values(cityMap), 1);
+        mapChart.setOption({
+            tooltip: { trigger: 'item', formatter: '{b}<br/>數量: {c} 座' },
+            visualMap: { left: 'right', min: 0, max: maxCity, text: ['多(綠)', '少(紅)'], inRange: { color: colorGradient }, calculable: true },
+            series: [{ type: 'map', map: 'Taiwan', roam: true, data: Object.keys(cityMap).map(c => ({ name: c, value: cityMap[c] })), label: { show: true, fontSize: 11 } }]
+        });
+
+        const venues = {}; data.forEach(d => venues[d.venue] = (venues[d.venue] || 0) + 1);
+        const maxVenue = Math.max(...Object.values(venues), 1);
+        treemapChart.setOption({
+            tooltip: { formatter: '{b}: {c} 座' },
+            visualMap: { show: false, min: 0, max: maxVenue, inRange: { color: colorGradient } },
+            series: [{ type: 'treemap', data: Object.keys(venues).map(k => ({ name: k, value: venues[k] })), roam: false, breadcrumb: { show: false }, itemStyle: { borderColor: '#fff' } }]
+        });
+
+        const natures = {}; data.forEach(d => natures[d.nature] = (natures[d.nature] || 0) + 1);
+        const sortedNatures = Object.entries(natures).sort((a, b) => b[1] - a[1]);
+        const maxNature = sortedNatures.length ? sortedNatures[0][1] : 1;
+        natureChart.setOption({
+            tooltip: {}, visualMap: { show: false, min: 0, max: maxNature, inRange: { color: colorGradient } },
+            xAxis: { type: 'category', data: sortedNatures.map(n => n[0]), axisLabel: { interval: 0, rotate: 30 } },
+            yAxis: { type: 'value' },
+            series: [{ type: 'bar', data: sortedNatures.map(n => n[1]), label: { show: true, position: 'top' } }]
+        });
+
+        const grades = {}; data.forEach(d => grades[d.grade] = (grades[d.grade] || 0) + 1);
+        const sortedGrades = Object.entries(grades).sort((a, b) => b[1] - a[1]);
+        const maxGrade = sortedGrades.length ? sortedGrades[0][1] : 1;
+        gradeChart.setOption({
+            tooltip: {}, visualMap: { show: false, min: 0, max: maxGrade, inRange: { color: colorGradient } },
+            xAxis: { type: 'category', data: sortedGrades.map(g => g[0]) }, yAxis: { type: 'value' },
+            series: [{ type: 'bar', data: sortedGrades.map(g => g[1]), label: { show: true, position: 'top' } }]
+        });
+    }
+
+    window.onresize = () => { mapChart.resize(); treemapChart.resize(); natureChart.resize(); gradeChart.resize(); };
+</script>
+</body>
+</html>
+
